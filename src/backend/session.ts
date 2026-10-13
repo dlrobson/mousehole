@@ -14,6 +14,12 @@ export type SessionStoreOptions = {
   durationSeconds: number;
   /** Whether to set the "Secure" flag on the session cookie. */
   httpsOnlyCookies: boolean;
+  /**
+   * The cookie's `Path` attribute. Defaults to "/" (the origin root). Behind a
+   * reverse proxy that serves the app under a prefix, this is the prefix so the
+   * browser only sends the session where it's useful.
+   */
+  cookiePath?: string;
   /** Fired after a known session is removed (expiry, logout, or manual). */
   onSessionDeleted?: (sessionId: string) => void;
 };
@@ -24,6 +30,7 @@ export type SessionStore = ReturnType<typeof createSessionStore>;
 export function createSessionStore(options: SessionStoreOptions) {
   const sessions = new Map<string, SessionEntry>();
   const defaultDurationMs = options.durationSeconds * 1000;
+  const defaultCookiePath = options.cookiePath ?? "/";
 
   function deleteSession(sessionId: string): void {
     const entry = sessions.get(sessionId);
@@ -68,14 +75,26 @@ export function createSessionStore(options: SessionStoreOptions) {
     if (sessionId) deleteSession(sessionId);
   }
 
-  function applyCookie(c: Context, sessionId: string): void {
+  // A request may override the path (a stripping proxy's X-Forwarded-Prefix),
+  // so the scope stays correct without a configured base path.
+  function applyCookie(
+    c: Context,
+    sessionId: string,
+    path = defaultCookiePath,
+  ): void {
     setCookie(c, SESSION_COOKIE_NAME, sessionId, {
       maxAge: options.durationSeconds,
       httpOnly: true,
       sameSite: "lax",
       secure: options.httpsOnlyCookies,
-      path: "/",
+      path,
     });
+  }
+
+  // Clearing must target the same path the cookie was set with, or the browser
+  // keeps sending it. Lives next to applyCookie, its counterpart.
+  function clearCookie(c: Context, path = defaultCookiePath): void {
+    deleteCookie(c, SESSION_COOKIE_NAME, { path });
   }
 
   return {
@@ -86,12 +105,6 @@ export function createSessionStore(options: SessionStoreOptions) {
     applyCookie,
     clearCookie,
   };
-}
-
-// Clearing the cookie needs no per-store state, but lives on the store's API
-// next to applyCookie, its counterpart.
-function clearCookie(c: Context): void {
-  deleteCookie(c, SESSION_COOKIE_NAME, { path: "/" });
 }
 
 export function extractSessionId(request: Request): string | undefined {

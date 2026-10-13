@@ -5,6 +5,16 @@ about how to read this document in [CONTRIBUTING.md](/CONTRIBUTING.md).
 
 ## Unreleased
 
+### Added
+
+- `config`: Serve the whole app (web UI and API) under a URL path prefix with
+  the new `MOUSEHOLE_BASE_PATH` environment variable, for hosting behind a
+  reverse proxy at a subpath such as `/mousehole/`. The frontend resolves its
+  URLs at runtime, so it also works behind a prefix-stripping proxy with the
+  variable unset, and an `X-Forwarded-Prefix` header is honoured for redirects
+  and cookie scoping in that case. The Host/Origin allowlists stay host-only;
+  see [Hosting Under a Subpath](/docs/hosting-under-a-subpath.md).
+
 ### Fixed
 
 - `config`: `MOUSEHOLE_INSECURE_ALLOW_NO_AUTH` is now exclusive with
@@ -15,6 +25,9 @@ about how to read this document in [CONTRIBUTING.md](/CONTRIBUTING.md).
 
 ### Changed
 
+- `web`: A request to the slash-less `/web` now redirects to `/web/` (as the
+  Vite dev server already did), so the build's relative asset URLs resolve
+  correctly under any base path.
 - `style`: Increase word spacing for Commissioner font in
   [2e7f1b0](https://github.com/t-mart/mousehole/commit/2e7f1b0)
 - `ui`: Use `required` attribute and `user-invalid` selector for form validation

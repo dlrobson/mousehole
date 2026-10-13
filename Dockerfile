@@ -44,7 +44,9 @@ COPY package.json ./
 COPY src ./src
 COPY --from=build-web ${BUN_BUILD_DIR}/dist ./dist
 
+# The probe runs inside the container, so it can read MOUSEHOLE_BASE_PATH and
+# hit the prefixed endpoint when the app is hosted under a subpath.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD bun -e "process.exit((await fetch('http://localhost:5010/health')).ok ? 0 : 1)"
+  CMD bun -e 'const base = (process.env.MOUSEHOLE_BASE_PATH ?? "").replace(/\/+$/, ""); process.exit((await fetch(`http://localhost:5010${base}/health`)).ok ? 0 : 1)'
 
 CMD ["bun", "run", "src/index.ts"]

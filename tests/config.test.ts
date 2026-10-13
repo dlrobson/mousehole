@@ -53,6 +53,50 @@ describe("MOUSEHOLE_STATE_DIR_PATH", () => {
   });
 });
 
+describe("MOUSEHOLE_BASE_PATH", () => {
+  test("defaults to the origin root (empty)", () => {
+    expect(buildConfig({}).basePath).toBe("");
+  });
+
+  test("accepts a single-segment prefix", () => {
+    expect(buildConfig({ MOUSEHOLE_BASE_PATH: "/mousehole" }).basePath).toBe(
+      "/mousehole",
+    );
+  });
+
+  test("accepts a multi-segment prefix", () => {
+    expect(
+      buildConfig({ MOUSEHOLE_BASE_PATH: "/apps/mousehole" }).basePath,
+    ).toBe("/apps/mousehole");
+  });
+
+  test("normalizes a trailing slash away", () => {
+    expect(buildConfig({ MOUSEHOLE_BASE_PATH: "/mousehole/" }).basePath).toBe(
+      "/mousehole",
+    );
+  });
+
+  test('treats a bare "/" as the origin root', () => {
+    expect(buildConfig({ MOUSEHOLE_BASE_PATH: "/" }).basePath).toBe("");
+  });
+
+  test.each([
+    "mousehole",
+    "https://host/mousehole",
+    "//host/mousehole",
+    "/mousehole/../x",
+    "/mousehole?x=1",
+    "/mousehole#fragment",
+    "/mouse hole",
+    String.raw`/mouse\hole`,
+    "/mouse//hole",
+  ])("rejects %s, naming the variable", (value) => {
+    expect(() => buildConfig({ MOUSEHOLE_BASE_PATH: value })).toThrow(
+      "MOUSEHOLE_BASE_PATH",
+    );
+  });
+});
+
 // A hermetic stand-in for the file reader buildConfig injects for `*_FILE`
 // secrets: serves the given path→contents map, and throws ENOENT like the real
 // reader for anything else.

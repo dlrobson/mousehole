@@ -99,7 +99,8 @@ The Dockerfile includes a default healthcheck that hits the
 `http://localhost:5010/health` endpoint (see
 [API Documentation](/docs/API.md#get-health)). A `200` status code indicates the
 service is live, and therefore, it is suitable for use in container
-orchestration.
+orchestration. When `MOUSEHOLE_BASE_PATH` is set, the healthcheck reads it and
+probes `<base>/health` automatically.
 
 If you change the port on which Mousehole listens with the `MOUSEHOLE_PORT`
 environment variable, make sure to override the
@@ -137,6 +138,10 @@ You can trigger an immediate update from the web UI with **Update Now**.
 - `MOUSEHOLE_ALLOWED_ORIGINS`: Comma-separated allowlist of `Origin` header
   values. Defaults to same-origin only. See
   [Origin Allowlist](/docs/security-guide.md#origin-allowlist).
+- `MOUSEHOLE_BASE_PATH`: URL path prefix under which to serve the whole app,
+  e.g. `"/mousehole"` to host it at `https://host/mousehole/`. Defaults to the
+  origin root. See
+  [Hosting Under a Subpath](/docs/hosting-under-a-subpath.md).
 
 ### Other tuning
 

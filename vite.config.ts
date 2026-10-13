@@ -16,12 +16,14 @@ function resolveGitHash(): string {
   }
 }
 
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
   return {
     root: path.resolve(import.meta.dirname, "src/frontend"),
-    // Everything Vite serves/builds lives under /web/ — the backend treats the
-    // prefix as "frontend assets" and everything else as its own.
-    base: "/web/",
+    // Build with relative asset URLs so the SPA works at any URL prefix —
+    // including behind a reverse proxy that strips one — instead of hardcoding
+    // /web/... into the bundle. Dev keeps the absolute /web/ base because the
+    // backend's dev proxy forwards to the Vite server's /web/ mount.
+    base: command === "build" ? "./" : "/web/",
     envDir: import.meta.dirname,
     // Don't wipe the backend's logs when both run under `bun dev`.
     clearScreen: false,
