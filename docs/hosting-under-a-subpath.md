@@ -35,11 +35,21 @@ JSON client).
 The base path also becomes the session cookie's `Path`, so the cookie is only
 sent for Mousehole requests.
 
+The web UI's HTML is rendered per request with `<base href="<prefix>/web/">`, so
+every relative URL in the bundle resolves against the prefix even on a deep link
+(`<prefix>/web/settings` finds `<prefix>/web/assets/...`) and even when the prefix
+comes from `X-Forwarded-Prefix` rather than from this variable. The flip side is
+that the frontend must never build a root-absolute URL (`fetch("/state")`): those
+ignore `<base>`. Mousehole's own calls go through `apiUrl()`, which resolves
+against `document.baseURI`.
+
 The only reason to set this is when your reverse proxy **does not** strip the
 prefix. If your proxy strips it (see below), leave `MOUSEHOLE_BASE_PATH` unset.
 
 > **Development:** the variable only affects the built UI. `bun dev` serves the
-> Vite dev server from its own absolute `/web/` base, so leave
+> Vite dev server from its own absolute `/web/` base (filling in the same
+> `<base href>` the backend fills in for the build, see
+> [`src/shared/web-base-url.ts`](/src/shared/web-base-url.ts)), so leave
 > `MOUSEHOLE_BASE_PATH` unset while developing; only `bun run build` produces a
 > prefix-agnostic bundle.
 

@@ -2,6 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      Filled in where this document is served: "<prefix>/web/" by the backend,
+      "/web/" by the Vite dev server. Everything below resolves against it, so
+      the UI works at any prefix, on any deep link. See
+      src/shared/web-base-url.ts.
+    -->
+    <base href="__MOUSEHOLE_BASE_URL__" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mousehole</title>
   </head>

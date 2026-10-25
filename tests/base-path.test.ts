@@ -7,6 +7,7 @@ import { parseSetCookie } from "set-cookie-parser";
 import type { WebMount } from "../src/backend/app.ts";
 import { SESSION_COOKIE_NAME } from "../src/backend/session.ts";
 import type { ErrorResponseBody } from "../src/shared/error-response.ts";
+import { WEB_BASE_URL_PLACEHOLDER } from "../src/shared/web-base-url.ts";
 import type { TestApp } from "./lib/helpers.ts";
 import { json, login, makeTestContext } from "./lib/helpers.ts";
 
@@ -118,6 +119,12 @@ describe("MOUSEHOLE_BASE_PATH=/mousehole", () => {
   });
 });
 
+// The `<base>` value a shell response was rendered with, if it has one.
+async function baseHref(response: Response): Promise<string | undefined> {
+  const html = await response.text();
+  return /<base href="([^"]*)"/.exec(html)?.[1];
+}
+
 describe("static UI under a base path", () => {
   let root: string;
   let app: TestApp;
@@ -127,7 +134,8 @@ describe("static UI under a base path", () => {
     mkdirSync(path.join(root, "assets"));
     writeFileSync(
       path.join(root, "index.html"),
-      '<!doctype html><script type="module" src="./assets/app.js"></script>',
+      `<!doctype html><base href="${WEB_BASE_URL_PLACEHOLDER}" />` +
+        '<script type="module" src="./assets/app.js"></script>',
     );
     writeFileSync(path.join(root, "assets", "app.js"), "// bundle");
     app = makeApp(
@@ -149,6 +157,26 @@ describe("static UI under a base path", () => {
     expect(await response.text()).toContain("./assets/app.js");
   });
 
+  test("names the base path in the shell's <base href>", async () => {
+    const response = await app.request("/mousehole/web/");
+    expect(await baseHref(response)).toBe("/mousehole/web/");
+    expect(response.headers.get("cache-control")).toBe("no-cache");
+  });
+
+  test("serves a deep link with the same <base href>", async () => {
+    const response = await app.request("/mousehole/web/settings/profile", {
+      headers: { accept: "text/html" },
+    });
+    expect(response.status).toBe(200);
+    expect(await baseHref(response)).toBe("/mousehole/web/");
+  });
+
+  test("404s a missing asset instead of answering with the shell", async () => {
+    const response = await app.request("/mousehole/web/assets/missing.js");
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain("./assets/app.js");
+  });
+
   test("redirects the slash-less <base>/web to <base>/web/", async () => {
     const response = await app.request("/mousehole/web");
     expect(response.status).toBe(302);
@@ -166,6 +194,59 @@ describe("static UI under a base path", () => {
       const response = await app.request(outsidePath);
       expect(response.status).toBe(404);
     }
+  });
+});
+
+// A prefix-stripping proxy advertises the prefix it removed with
+// X-Forwarded-Prefix. That header is per request, so the shell's <base href> —
+// and the cache keys that guard it — have to follow it.
+describe("static UI behind a prefix-stripping proxy", () => {
+  let root: string;
+  let app: TestApp;
+
+  beforeAll(() => {
+    root = mkdtempSync(path.join(tmpdir(), "mousehole-web-"));
+    writeFileSync(
+      path.join(root, "index.html"),
+      `<!doctype html><base href="${WEB_BASE_URL_PLACEHOLDER}" />`,
+    );
+    app = makeApp({}, { mode: "serve-static", root });
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("uses the forwarded prefix for <base href> and varies on it", async () => {
+    const response = await app.request("/web/", {
+      headers: { "x-forwarded-prefix": "/apps/mousehole" },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(
+      '<base href="/apps/mousehole/web/" />',
+    );
+    expect(response.headers.get("vary")).toBe("X-Forwarded-Prefix");
+  });
+
+  test("serves a deep link with the forwarded prefix's <base href>", async () => {
+    const response = await app.request("/web/settings", {
+      headers: {
+        accept: "text/html",
+        "x-forwarded-prefix": "/apps/mousehole",
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(
+      '<base href="/apps/mousehole/web/" />',
+    );
+  });
+
+  test("ignores an invalid forwarded prefix", async () => {
+    const response = await app.request("/web/", {
+      headers: { "x-forwarded-prefix": "https://evil.example" },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('<base href="/web/" />');
   });
 });
 

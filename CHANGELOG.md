@@ -25,6 +25,11 @@ about how to read this document in [CONTRIBUTING.md](/CONTRIBUTING.md).
 
 ### Changed
 
+- `web`: The UI's HTML now carries a server-supplied `<base href>` naming the
+  prefix it was served under, so relative asset URLs resolve on deep links
+  (`<prefix>/web/settings`) and behind a prefix-stripping proxy, where the
+  prefix is known only per request. A missing asset still 404s rather than being
+  answered with the HTML shell.
 - `web`: A request to the slash-less `/web` now redirects to `/web/` (as the
   Vite dev server already did), so the build's relative asset URLs resolve
   correctly under any base path.

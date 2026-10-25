@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { Hono, type Context } from "hono";
 import { accepts } from "hono/accepts";
 import { bodyLimit } from "hono/body-limit";
@@ -20,10 +22,31 @@ import {
 } from "#backend/http-boundary.ts";
 import { logger } from "#backend/logger.ts";
 import { extractSessionId } from "#backend/session.ts";
+import { WEB_BASE_URL_PLACEHOLDER } from "#shared/web-base-url.ts";
 
 const healthEndpointPath = "/health";
 
 const maxJsonRequestBodyBytes = 8 * 1024;
+
+/**
+ * Escape a value for interpolation into a double-quoted HTML attribute.
+ *
+ * `normalizeBasePath` already restricts prefixes to a path-safe charset, which
+ * excludes `"`, but `&` is legal in a path and would otherwise open an entity.
+ */
+function escapeAttribute(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+}
+
+/**
+ * Whether a path names a file rather than a page.
+ *
+ * A missing `.js` must 404: answering it with the HTML shell would hand the
+ * browser a document that fails to parse as JavaScript or CSS.
+ */
+function looksLikeFile(pathname: string): boolean {
+  return /\.[^/]+$/.test(pathname);
+}
 
 /**
  * How the web UI is served under `<base>/web`. Dev reverse-proxies to the Vite
@@ -177,10 +200,11 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
   });
 
   // The web UI. Not protected: the login page itself needs these assets. The
-  // Vite build uses relative asset URLs (see vite.config.ts), so a slash-less
-  // /web would resolve them one directory too high; redirect to the directory
-  // form (which is what Vite's own dev server does). Registered before the
-  // /web/* mount so the wildcard doesn't answer it first.
+  // build's asset URLs are relative (see vite.config.ts) and the document names
+  // its own base (`<base href>`, filled in per request below), so the UI works
+  // under any prefix and on any deep link. The slash-less /web still redirects
+  // to the directory form to keep one URL per page (as Vite's dev server does).
+  // Registered before the /web/* mount so the wildcard doesn't answer it first.
   if (webMount) {
     app.get(at("/web"), (c) => c.redirect(`${replyBasePath(c)}/web/`));
 
@@ -204,6 +228,31 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
       };
       app.get(at("/web/*"), proxyToVite);
     } else {
+      // The HTML shell is rendered per request instead of served as a file: its
+      // <base href> has to name the prefix this request arrived under, which is
+      // not a constant — X-Forwarded-Prefix can differ per host behind a
+      // prefix-stripping proxy, and a deep link is served at a deeper path than
+      // the assets live at.
+      const indexTemplate = readFileSync(`${webMount.root}/index.html`, "utf8");
+      const renderIndex = (c: Context) =>
+        c.html(
+          indexTemplate.replace(
+            WEB_BASE_URL_PLACEHOLDER,
+            escapeAttribute(`${replyBasePath(c)}/web/`),
+          ),
+          200,
+          {
+            // The body depends on a request header, so a cache must not hand it
+            // to a request that carried a different prefix — and the HTML is
+            // always revalidated, so a redeploy is picked up immediately.
+            "Cache-Control": "no-cache",
+            Vary: "X-Forwarded-Prefix",
+          },
+        );
+
+      // The static mount serves the directory's own index.html, so the shell
+      // route has to come first to win the bare `/web/` path.
+      app.get(at("/web/"), renderIndex);
       app.use(
         at("/web/*"),
         serveStatic({
@@ -213,10 +262,16 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
             requestPath.slice(at("/web").length),
         }),
       );
-      app.get(
-        at("/web/"),
-        serveStatic({ path: `${webMount.root}/index.html` }),
-      );
+      // serveStatic falls through when it finds no file, so whatever is left is
+      // either a deep link into the app (answer with the shell) or a missing
+      // asset (404 rather than HTML that fails to parse as JS or CSS).
+      app.use(at("/web/*"), async (c: Context, next) => {
+        const isDeepLink =
+          (c.req.method === "GET" || c.req.method === "HEAD") &&
+          (c.req.header("accept")?.includes("text/html") ?? false) &&
+          !looksLikeFile(c.req.path);
+        return isDeepLink ? renderIndex(c) : next();
+      });
     }
   }
 
