@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { Hono, type Context } from "hono";
 import { accepts } from "hono/accepts";
 import { bodyLimit } from "hono/body-limit";
@@ -19,10 +21,24 @@ import {
 } from "#backend/http-boundary.ts";
 import { logger } from "#backend/logger.ts";
 import { extractSessionId } from "#backend/session.ts";
+import {
+  WEB_BASE_URL,
+  WEB_BASE_URL_PLACEHOLDER,
+} from "#shared/web-base-url.ts";
 
 const healthEndpointPath = "/health";
 
 const maxJsonRequestBodyBytes = 8 * 1024;
+
+/**
+ * Whether a path names a file rather than a page.
+ *
+ * A missing `.js` must 404: answering it with the HTML shell would hand the
+ * browser a document that fails to parse as JavaScript or CSS.
+ */
+function looksLikeFile(pathname: string): boolean {
+  return /\.[^/]+$/.test(pathname);
+}
 
 /**
  * How the web UI is served under /web. Dev reverse-proxies to the Vite dev
@@ -158,6 +174,37 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
     app.get("/web", proxyToVite);
     app.get("/web/*", proxyToVite);
   } else if (webMount?.mode === "serve-static") {
+    // The shell is served from memory with its <base> filled in, rather than
+    // handed over as a file: relative asset URLs then resolve against the base
+    // the document declares, so a deep link (/web/settings) and the slash-less
+    // /web both load the same bundle the directory form does.
+    //
+    // The base is the constant WEB_BASE_URL today. It is written here, not
+    // baked in at build time, because that is the seam a URL prefix would widen
+    // to a per-request value.
+    const shellPath = `${webMount.root}/index.html`;
+    const shellSource = readFileSync(shellPath, "utf8");
+    // A document that lost the marker has no base to declare, so its relative
+    // asset URLs resolve against the request path — a blank page whose only
+    // server-side trace is the 200. Fail at assembly instead.
+    if (!shellSource.includes(WEB_BASE_URL_PLACEHOLDER)) {
+      throw new Error(
+        `${shellPath} has no ${WEB_BASE_URL_PLACEHOLDER} marker, so the shell cannot declare its base. Rebuild it with \`bun run build\`.`,
+      );
+    }
+    const shellHtml = shellSource.replaceAll(
+      WEB_BASE_URL_PLACEHOLDER,
+      WEB_BASE_URL,
+    );
+    const renderShell = (c: Context) => c.html(shellHtml);
+
+    // Registered before the static mount, which would otherwise answer these
+    // from the file on disk: a directory resolves to its own index.html, and
+    // /web/index.html is the document itself, the one copy still carrying the
+    // placeholder.
+    app.get("/web", renderShell);
+    app.get("/web/", renderShell);
+    app.get("/web/index.html", renderShell);
     app.use(
       "/web/*",
       serveStatic({
@@ -165,7 +212,16 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
         rewriteRequestPath: (requestPath) => requestPath.replace(/^\/web/, ""),
       }),
     );
-    app.get("/web", serveStatic({ path: `${webMount.root}/index.html` }));
+    // serveStatic falls through when it finds no file, so whatever is left is
+    // either a deep link into the app (answer with the shell) or a missing asset
+    // (404 rather than HTML that fails to parse as JS or CSS).
+    app.use("/web/*", async (c: Context, next) => {
+      const isDeepLink =
+        (c.req.method === "GET" || c.req.method === "HEAD") &&
+        (c.req.header("accept")?.includes("text/html") ?? false) &&
+        !looksLikeFile(c.req.path);
+      return isDeepLink ? renderShell(c) : next();
+    });
   }
 
   return app;

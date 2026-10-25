@@ -15,6 +15,13 @@ about how to read this document in [CONTRIBUTING.md](/CONTRIBUTING.md).
 
 ### Changed
 
+- `web`: A deep link such as `/web/settings` now loads the app instead of
+  returning a 404. The UI's HTML is served with its own `<base href="/web/">`,
+  and the slash-less `/web` now loads it with working assets (previously its
+  relative asset URLs resolved to `/assets`).
+  The base is written by the server when it serves the shell, not baked in by the
+  build, so the bundle is built with relative asset URLs.
+
 - `style`: Increase word spacing for Commissioner font in
   [2e7f1b0](https://github.com/t-mart/mousehole/commit/2e7f1b0)
 - `ui`: Use `required` attribute and `user-invalid` selector for form validation
