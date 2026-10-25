@@ -2,6 +2,10 @@
 
 Mousehole provides an API for programmatic access to its functionality.
 
+All endpoint paths below are relative to the server root. When
+[`MOUSEHOLE_BASE_PATH`](/docs/hosting-under-a-subpath.md) is set, prefix each
+path with it (e.g. `GET /mousehole/state` instead of `GET /state`).
+
 ## Authentication
 
 Protected endpoints accept a Bearer token. Set the `MOUSEHOLE_AUTH_TOKEN`

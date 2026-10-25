@@ -68,14 +68,23 @@ export function createSessionStore(options: SessionStoreOptions) {
     if (sessionId) deleteSession(sessionId);
   }
 
-  function applyCookie(c: Context, sessionId: string): void {
+  // The cookie's `Path` is the caller's decision, not the store's: it depends on
+  // this request's public prefix, which a per-app store cannot know (see
+  // replyBasePath in app.ts).
+  function applyCookie(c: Context, sessionId: string, path: string): void {
     setCookie(c, SESSION_COOKIE_NAME, sessionId, {
       maxAge: options.durationSeconds,
       httpOnly: true,
       sameSite: "lax",
       secure: options.httpsOnlyCookies,
-      path: "/",
+      path,
     });
+  }
+
+  // Clearing must target a path the cookie may have been set with, or the
+  // browser keeps sending it. Lives next to applyCookie, its counterpart.
+  function clearCookie(c: Context, path: string): void {
+    deleteCookie(c, SESSION_COOKIE_NAME, { path });
   }
 
   return {
@@ -86,12 +95,6 @@ export function createSessionStore(options: SessionStoreOptions) {
     applyCookie,
     clearCookie,
   };
-}
-
-// Clearing the cookie needs no per-store state, but lives on the store's API
-// next to applyCookie, its counterpart.
-function clearCookie(c: Context): void {
-  deleteCookie(c, SESSION_COOKIE_NAME, { path: "/" });
 }
 
 export function extractSessionId(request: Request): string | undefined {

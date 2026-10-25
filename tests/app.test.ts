@@ -1,14 +1,6 @@
 import { parseSetCookie } from "set-cookie-parser";
-import type { MockInstance } from "vitest";
 
-import { createApp } from "../src/backend/app.ts";
-import { buildConfig } from "../src/backend/config.ts";
-import type { AppContext } from "../src/backend/context.ts";
-import { createAppContext } from "../src/backend/context.ts";
-import type { FetchLike } from "../src/backend/external-api/fetch.ts";
 import { SESSION_COOKIE_NAME } from "../src/backend/session.ts";
-import type { State } from "../src/backend/state/serde.ts";
-import type { StateStore } from "../src/backend/state/store.ts";
 import type { ErrorResponseBody } from "../src/shared/error-response.ts";
 import type {
   ContactStatus,
@@ -16,76 +8,10 @@ import type {
   PublicState,
   SerializedMamContact,
 } from "../src/shared/public-state.ts";
-import { json } from "./lib/helpers.ts";
+import type { TestApp } from "./lib/helpers.ts";
+import { json, login, makeTestContext, postLogin } from "./lib/helpers.ts";
 import type { MamUpdateOutcome } from "./lib/mam-test-server.ts";
 import { createMamTestServer } from "./lib/mam-test-server.ts";
-
-type TestApp = ReturnType<typeof createApp>;
-
-// Tests must never touch the real network; contexts built without an explicit
-// fetchImpl fail loudly if anything tries.
-const rejectExternalFetch: FetchLike = () =>
-  Promise.reject(new Error("unexpected external fetch in test"));
-
-// An in-memory StateStore for tests: no disk, so contexts stay hermetic and
-// isolated. The real on-disk StateFileStore is exercised in store.test.ts.
-function createInMemoryStateStore(initial?: State): StateStore {
-  let state = initial;
-  return {
-    readIfExists: () => Promise.resolve(state),
-    write: (next) => {
-      state = next;
-      return Promise.resolve();
-    },
-  };
-}
-
-function makeTestContext(
-  options: { env?: NodeJS.ProcessEnv; fetchImpl?: FetchLike } = {},
-): {
-  ctx: AppContext;
-  app: TestApp;
-  store: StateStore;
-  writeSpy: MockInstance<StateStore["write"]>;
-} {
-  const config = buildConfig({
-    MOUSEHOLE_AUTH_PASSWORD: "s3cr3t",
-    MOUSEHOLE_UPDATE_INTERVAL_SECONDS: "3600",
-    ...options.env,
-  });
-  const store = createInMemoryStateStore();
-  // Spy on write so tests can assert what got persisted. restoreMocks
-  // (vitest.config.ts) puts it back after each test.
-  const writeSpy = vi.spyOn(store, "write");
-  const ctx = createAppContext(config, {
-    fetchImpl: options.fetchImpl ?? rejectExternalFetch,
-    stateFile: store,
-  });
-  return { ctx, app: createApp(ctx), store, writeSpy };
-}
-
-async function postLogin(
-  app: TestApp,
-  body: Record<string, unknown> | string,
-): Promise<Response> {
-  return app.request("/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
-}
-
-async function login(app: TestApp, password = "s3cr3t"): Promise<string> {
-  const response = await postLogin(app, { password });
-  if (response.status !== 200) {
-    throw new Error(`Login failed with ${response.status}`);
-  }
-  const cookieValue = parseSetCookie(response.headers.getSetCookie()).find(
-    (cookie) => cookie.name === SESSION_COOKIE_NAME,
-  )?.value;
-  if (!cookieValue) throw new Error("Login response missing session cookie");
-  return `${SESSION_COOKIE_NAME}=${cookieValue}`;
-}
 
 async function getState(app: TestApp, cookie: string): Promise<Response> {
   return app.request("/state", { headers: { Cookie: cookie } });
@@ -124,14 +50,14 @@ describe("GET / content negotiation", () => {
       location: "/health",
     },
     {
-      name: "Accept: text/html redirects to /web",
+      name: "Accept: text/html redirects to /web/",
       accept: "text/html",
-      location: "/web",
+      location: "/web/",
     },
     {
-      name: "no Accept header redirects to /web",
+      name: "no Accept header redirects to /web/",
       accept: undefined,
-      location: "/web",
+      location: "/web/",
     },
   ])("$name", async ({ accept, location }) => {
     const response = await app.request(
@@ -140,6 +66,20 @@ describe("GET / content negotiation", () => {
     );
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe(location);
+  });
+});
+
+// The slash-less /web redirect is not base-path-specific: it exists so the
+// build's relative asset URLs resolve, which matters at the origin root too.
+describe("GET /web (no base path)", () => {
+  const { app } = makeTestContext({
+    webMount: { mode: "vite-dev-server-proxy", target: "http://localhost:1" },
+  });
+
+  test("redirects the slash-less /web to /web/", async () => {
+    const response = await app.request("/web");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/web/");
   });
 });
 

@@ -44,7 +44,10 @@ COPY package.json ./
 COPY src ./src
 COPY --from=build-web ${BUN_BUILD_DIR}/dist ./dist
 
+# The probe runs inside the container and asks the app's own config where the
+# API lives: healthcheckUrl() resolves <base>/health through buildConfig, so the
+# check cannot drift from how MOUSEHOLE_BASE_PATH is validated and normalized.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD bun -e "process.exit((await fetch('http://localhost:5010/health')).ok ? 0 : 1)"
+  CMD bun -e 'const { healthcheckUrl } = await import("./src/backend/healthcheck.ts"); process.exit((await fetch(healthcheckUrl(process.env))).ok ? 0 : 1)'
 
 CMD ["bun", "run", "src/index.ts"]

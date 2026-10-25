@@ -4,6 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "hono/bun";
 import { proxy } from "hono/proxy";
 
+import { normalizeBasePath } from "#backend/base-path.ts";
 import type { AppContext } from "#backend/context.ts";
 import { toErrorResponseArgs } from "#backend/error.ts";
 import { handlePutCookie } from "#backend/handlers/cookie.ts";
@@ -25,8 +26,8 @@ const healthEndpointPath = "/health";
 const maxJsonRequestBodyBytes = 8 * 1024;
 
 /**
- * How the web UI is served under /web. Dev reverse-proxies to the Vite dev
- * server (single origin: no CORS, no cookie config, dev URL == prod URL);
+ * How the web UI is served under `<base>/web`. Dev reverse-proxies to the Vite
+ * dev server (single origin: no CORS, no cookie config, dev URL == prod URL);
  * prod serves the `vite build` output. Tests omit it to mount nothing.
  */
 export type WebMount =
@@ -47,6 +48,24 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
   const host = hostAllowed(ctx.config.allowedHosts);
   const auth = requireAuth(ctx.config.auth, ctx.sessions.isSessionValid);
   const origin = originAllowed(ctx.config.allowedOrigins);
+
+  // Everything is mounted under this prefix: "" (the default) keeps the app at
+  // the origin root exactly as before, while "/mousehole" nests every route
+  // under it. A stripping reverse proxy needs no prefix here at all.
+  const basePath = ctx.config.basePath;
+  const at = (path: string): string =>
+    path === "/" ? basePath || "/" : `${basePath}${path}`;
+
+  // The prefix to put in replies (redirects, cookie scope). Config wins; when
+  // MOUSEHOLE_BASE_PATH is unset, a stripping proxy may advertise the prefix it
+  // removed via X-Forwarded-Prefix. It's validated as a path prefix, so it can
+  // never become an open redirect, and a client can only ever scope its own
+  // cookie with it.
+  const replyBasePath = (c: Context): string => {
+    if (basePath) return basePath;
+    const forwarded = c.req.header("x-forwarded-prefix");
+    return forwarded === undefined ? "" : (normalizeBasePath(forwarded) ?? "");
+  };
 
   const app = new Hono();
 
@@ -76,16 +95,26 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
 
   app.notFound((c) => c.json({ type: "not-found", message: "Not Found" }, 404));
 
-  app.get("/", (c) => {
+  const rootHandler = (c: Context) => {
     const mediaType = accepts(c, {
       header: "Accept",
       supports: ["text/html", "application/json"],
       default: "text/html",
     });
-    return c.redirect(mediaType === "text/html" ? "/web" : healthEndpointPath);
-  });
+    const prefix = replyBasePath(c);
+    return c.redirect(
+      mediaType === "text/html"
+        ? `${prefix}/web/`
+        : `${prefix}${healthEndpointPath}`,
+    );
+  };
 
-  app.post("/login", host, origin, requireJsonBody, async (c) => {
+  app.get(at("/"), rootHandler);
+  // A trailing slash on the base root is common hand-typed input; treat it the
+  // same as the base root itself.
+  if (basePath) app.get(`${basePath}/`, rootHandler);
+
+  app.post(at("/login"), host, origin, requireJsonBody, async (c) => {
     const result = await handlePostLogin(
       c.req.raw,
       ctx.config.auth,
@@ -94,29 +123,39 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
     if (!result.ok) {
       return c.json({ ok: false, message: result.message }, result.status);
     }
-    ctx.sessions.applyCookie(c, result.sessionId);
+    ctx.sessions.applyCookie(c, result.sessionId, replyBasePath(c) || "/");
     return c.json({ ok: true });
   });
 
-  app.post("/logout", host, origin, (c) => {
+  app.post(at("/logout"), host, origin, (c) => {
     ctx.sessions.deleteRequestSession(c.req.raw);
-    ctx.sessions.clearCookie(c);
+    // The cookie may have been set under a different reply prefix than this
+    // request carries (before MOUSEHOLE_BASE_PATH was introduced, or before a
+    // proxy started sending X-Forwarded-Prefix), and a browser only drops a
+    // cookie whose Path matches. Clear every path it could be scoped to.
+    const path = replyBasePath(c) || "/";
+    ctx.sessions.clearCookie(c, path);
+    if (path !== "/") ctx.sessions.clearCookie(c, "/");
     return c.json({ ok: true });
   });
 
-  app.post("/updates", host, auth, origin, async (c) =>
+  app.post(at("/updates"), host, auth, origin, async (c) =>
     c.json(await handlePostUpdate(ctx)),
   );
 
-  app.get("/state", host, auth, async (c) => c.json(await handleGetState(ctx)));
+  app.get(at("/state"), host, auth, async (c) =>
+    c.json(await handleGetState(ctx)),
+  );
 
-  app.put("/cookie", host, auth, origin, requireJsonBody, async (c) =>
+  app.put(at("/cookie"), host, auth, origin, requireJsonBody, async (c) =>
     c.json(await handlePutCookie(ctx, c.req.raw)),
   );
 
-  app.get(healthEndpointPath, async (c) => c.json(await handleGetHealth(ctx)));
+  app.get(at(healthEndpointPath), async (c) =>
+    c.json(await handleGetHealth(ctx)),
+  );
 
-  app.get("/events", host, auth, origin, (c) => {
+  app.get(at("/events"), host, auth, origin, (c) => {
     const sessionId = extractSessionId(c.req.raw) ?? "";
     let unregister: (() => void) | undefined;
     const stream = new ReadableStream<string>({
@@ -137,35 +176,48 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
     });
   });
 
-  // The web UI. Not protected: the login page itself needs these assets.
-  if (webMount?.mode === "vite-dev-server-proxy") {
-    const proxyToVite = async (c: Context) => {
-      const { pathname, search } = new URL(c.req.url);
-      // Vite serves the page at the trailing-slash base (/web/).
-      const path = pathname === "/web" ? "/web/" : pathname;
-      try {
-        return await proxy(`${webMount.target}${path}${search}`, {
-          headers: c.req.header(),
-        });
-      } catch {
-        return c.text(
-          `The Vite dev server isn't reachable at ${webMount.target}.\n` +
-            "Start it with `bun dev:web`, or run both processes with `bun dev`.",
-          502,
-        );
-      }
-    };
-    app.get("/web", proxyToVite);
-    app.get("/web/*", proxyToVite);
-  } else if (webMount?.mode === "serve-static") {
-    app.use(
-      "/web/*",
-      serveStatic({
-        root: webMount.root,
-        rewriteRequestPath: (requestPath) => requestPath.replace(/^\/web/, ""),
-      }),
-    );
-    app.get("/web", serveStatic({ path: `${webMount.root}/index.html` }));
+  // The web UI. Not protected: the login page itself needs these assets. The
+  // Vite build uses relative asset URLs (see vite.config.ts), so a slash-less
+  // /web would resolve them one directory too high; redirect to the directory
+  // form (which is what Vite's own dev server does). Registered before the
+  // /web/* mount so the wildcard doesn't answer it first.
+  if (webMount) {
+    app.get(at("/web"), (c) => c.redirect(`${replyBasePath(c)}/web/`));
+
+    if (webMount.mode === "vite-dev-server-proxy") {
+      const proxyToVite = async (c: Context) => {
+        const { pathname, search } = new URL(c.req.url);
+        // The backend route carries the configured prefix; Vite always serves
+        // the UI from its /web/ base.
+        const path = pathname.slice(basePath.length);
+        try {
+          return await proxy(`${webMount.target}${path}${search}`, {
+            headers: c.req.header(),
+          });
+        } catch {
+          return c.text(
+            `The Vite dev server isn't reachable at ${webMount.target}.\n` +
+              "Start it with `bun dev:web`, or run both processes with `bun dev`.",
+            502,
+          );
+        }
+      };
+      app.get(at("/web/*"), proxyToVite);
+    } else {
+      app.use(
+        at("/web/*"),
+        serveStatic({
+          root: webMount.root,
+          // The route carries the prefix; the files on disk do not.
+          rewriteRequestPath: (requestPath) =>
+            requestPath.slice(at("/web").length),
+        }),
+      );
+      app.get(
+        at("/web/"),
+        serveStatic({ path: `${webMount.root}/index.html` }),
+      );
+    }
   }
 
   return app;

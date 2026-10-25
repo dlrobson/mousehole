@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { RequireAtLeastOne } from "type-fest";
 import * as z from "zod";
 
+import { normalizeBasePath } from "#backend/base-path.ts";
 import type { LogLevelName } from "#backend/logger.ts";
 import { DEFAULT_LOG_LEVEL, LOG_LEVEL_NAMES } from "#backend/logger.ts";
 
@@ -158,6 +159,19 @@ function resolveAuthConfig(
   return { type: "none", insecureAllowNoAuth };
 }
 
+function resolveBasePath(env: NodeJS.ProcessEnv): string {
+  const raw = getEnv(env, "MOUSEHOLE_BASE_PATH");
+  if (raw === undefined) return "";
+
+  const basePath = normalizeBasePath(raw);
+  if (basePath === undefined) {
+    throw new Error(
+      `Invalid environment variable MOUSEHOLE_BASE_PATH="${raw}": must be a URL path prefix like "/mousehole" (start with "/", no scheme, host, query, fragment, or "..").`,
+    );
+  }
+  return basePath;
+}
+
 function resolveAllowedHosts(env: NodeJS.ProcessEnv): AllowedHostsConfig {
   const value = getEnv(env, "MOUSEHOLE_ALLOWED_HOSTS");
   if (value === undefined)
@@ -250,6 +264,18 @@ export function buildConfig(
      * Defaults to 5010.
      */
     port: resolveNumber(env, "MOUSEHOLE_PORT", portSchema, 5010),
+
+    /**
+     * URL path prefix under which the whole app is served, for hosting behind
+     * a reverse proxy at e.g. https://host/mousehole/.
+     *
+     * Empty (the default) means the origin root, exactly as before this option
+     * existed. A non-empty value such as "/mousehole" must start with "/" and
+     * carries no scheme, host, query, fragment, or ".."; any trailing slash is
+     * normalized away. It is unrelated to the Host/Origin allowlists, which are
+     * host-only.
+     */
+    basePath: resolveBasePath(env),
 
     /**
      * Whether to set the "Secure" flag on authentication cookies.
