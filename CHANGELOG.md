@@ -5,6 +5,16 @@ about how to read this document in [CONTRIBUTING.md](/CONTRIBUTING.md).
 
 ## Unreleased
 
+### Added
+
+- `web`: `MOUSEHOLE_BASE_PATH` serves the whole app — UI and API — under a URL
+  path prefix such as `/mousehole`, so Mousehole can share a hostname with other
+  apps behind a reverse proxy. A proxy that strips the prefix before forwarding
+  needs no configuration: Mousehole reads the prefix from its
+  `X-Forwarded-Prefix` header and uses it for redirects, the UI's base URL, and
+  the session cookie's scope. See
+  [Hosting Under a Subpath](/docs/hosting-under-a-subpath.md).
+
 ### Fixed
 
 - `config`: `MOUSEHOLE_INSECURE_ALLOW_NO_AUTH` is now exclusive with
@@ -17,8 +27,9 @@ about how to read this document in [CONTRIBUTING.md](/CONTRIBUTING.md).
 
 - `web`: A deep link such as `/web/settings` now loads the app instead of
   returning a 404. The UI's HTML is served with its own `<base href="/web/">`,
-  and the slash-less `/web` now loads it with working assets (previously its
-  relative asset URLs resolved to `/assets`).
+  and the slash-less `/web` now redirects to `/web/` (as the Vite dev server
+  already did) so the document's relative asset URLs resolve; previously the
+  page was served in place and its assets resolved to `/assets`.
   The base is written by the server when it serves the shell, not baked in by the
   build, so the bundle is built with relative asset URLs.
 
