@@ -148,6 +148,24 @@ describe.each(mounts)("web shell served $name", ({ env, basePath }) => {
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe(`${basePath}/web`);
   });
+
+  // The shell's body depends on X-Forwarded-Prefix exactly when no prefix is
+  // configured. A cache that keys on the URL alone could then replay one
+  // prefix's document (its <base>) to another prefix's request, so say which
+  // request header the body varies by — and only when it really does.
+  test("tells caches whether the shell depends on the forwarded prefix", async () => {
+    const response = await app.request(`${web}/`, {
+      headers: { "x-forwarded-prefix": "/other" },
+    });
+    expect(response.status).toBe(200);
+
+    const vary = response.headers.get("vary")?.toLowerCase();
+    if (basePath === "") {
+      expect(vary).toContain("x-forwarded-prefix");
+    } else {
+      expect(vary).toBeUndefined();
+    }
+  });
 });
 
 describe("the shell's base comes from the runtime, not the build", () => {

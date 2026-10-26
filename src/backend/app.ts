@@ -241,13 +241,19 @@ export function createApp(ctx: AppContext, webMount?: WebMount): Hono {
     // assembly. It is cheap string work on the cached source (read exactly
     // once), and the shell carries no long-lived cache header, so there is no
     // prefix-keyed cache to keep in sync.
-    const renderShell = (c: Context) =>
-      c.html(
+    const renderShell = (c: Context) => {
+      // The document's base follows X-Forwarded-Prefix only while no prefix is
+      // configured; a configured prefix is what every response declares. Tell
+      // caches that much, or one URL could be stored under one prefix's base
+      // and replayed to a request whose prefix differs.
+      if (configuredBasePath === "") c.header("Vary", "X-Forwarded-Prefix");
+      return c.html(
         shellSource.replaceAll(
           WEB_BASE_URL_PLACEHOLDER,
           webBaseFor(basePathFor(c)),
         ),
       );
+    };
 
     // Registered before the static mount, which would otherwise answer these
     // from the file on disk: a directory resolves to its own index.html, and
