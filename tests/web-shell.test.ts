@@ -22,8 +22,8 @@ type TestApp = ReturnType<typeof createApp>;
 
 // An app serving a web UI out of a throwaway dist directory. The UI routes are
 // unauthenticated, so the password is only there to make config resolvable.
-function makeApp(root: string): TestApp {
-  const config = buildConfig({ MOUSEHOLE_AUTH_PASSWORD: "s3cr3t" });
+function makeApp(root: string, env: NodeJS.ProcessEnv = {}): TestApp {
+  const config = buildConfig({ MOUSEHOLE_AUTH_PASSWORD: "s3cr3t", ...env });
   const ctx = createAppContext(config, {
     fetchImpl: rejectExternalFetch,
     stateFile: createInMemoryStateStore(),
@@ -31,68 +31,75 @@ function makeApp(root: string): TestApp {
   return createApp(ctx, { mode: "serve-static", root });
 }
 
+// The shell's behaviour must not depend on where the app is mounted, so every
+// case runs against the origin root and against a configured prefix.
+const mounts = [
+  { name: "at the origin root", env: {}, basePath: "" },
+  {
+    name: "under MOUSEHOLE_BASE_PATH=/mousehole",
+    env: { MOUSEHOLE_BASE_PATH: "/mousehole" },
+    basePath: "/mousehole",
+  },
+];
+
 // The `<base>` value a shell response was rendered with, if it has one.
 async function baseHref(response: Response): Promise<string | undefined> {
   const html = await response.text();
   return /<base href="([^"]*)"/.exec(html)?.[1];
 }
 
-// `transformIndexHtml` is a hook union; the plugin in vite.config.ts uses the
-// object form, whose handler ignores its context argument.
-type HtmlReplacer = (html: string) => string | undefined;
-
-type HtmlTransformPlugin = {
-  name: string;
-  apply?: string;
-  transformIndexHtml?: HtmlReplacer | { order?: string; handler: HtmlReplacer };
-};
-
-// The exported config is either the object or a function of the command, and the
-// build and serve arms set different bases, so each has to be reached on its own.
-function resolveViteConfig(command: "build" | "serve", mode: string) {
-  return typeof viteConfig === "function"
-    ? viteConfig({ command, mode })
-    : viteConfig;
+function writeFixture(): string {
+  const root = mkdtempSync(path.join(tmpdir(), "mousehole-web-"));
+  mkdirSync(path.join(root, "assets"));
+  writeFileSync(
+    path.join(root, "index.html"),
+    `<!doctype html><base href="${WEB_BASE_URL_PLACEHOLDER}" />` +
+      '<script type="module" src="./assets/app.js"></script>',
+  );
+  writeFileSync(path.join(root, "assets", "app.js"), "// bundle");
+  return root;
 }
 
-describe("web shell", () => {
+describe.each(mounts)("web shell served $name", ({ env, basePath }) => {
   let root: string;
   let app: TestApp;
+  const web = `${basePath}/web`;
 
   beforeAll(() => {
-    root = mkdtempSync(path.join(tmpdir(), "mousehole-web-"));
-    mkdirSync(path.join(root, "assets"));
-    writeFileSync(
-      path.join(root, "index.html"),
-      `<!doctype html><base href="${WEB_BASE_URL_PLACEHOLDER}" />` +
-        '<script type="module" src="./assets/app.js"></script>',
-    );
-    writeFileSync(path.join(root, "assets", "app.js"), "// bundle");
-    app = makeApp(root);
+    root = writeFixture();
+    app = makeApp(root, env);
   });
 
   afterAll(() => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test("declares /web/ as the base in the served shell", async () => {
-    for (const pagePath of ["/web", "/web/", "/web/index.html"]) {
+  test("declares the mount as the base in the served shell", async () => {
+    for (const pagePath of [`${web}/`, `${web}/index.html`]) {
       const response = await app.request(pagePath);
       expect(response.status).toBe(200);
-      expect(await baseHref(response)).toBe("/web/");
+      expect(await baseHref(response)).toBe(`${web}/`);
     }
   });
 
+  // One canonical URL, matching what the Vite dev server already does. The
+  // shell route stays for the directory form and every deeper page.
+  test("redirects the slash-less /web to the directory form", async () => {
+    const response = await app.request(web);
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(`${web}/`);
+  });
+
   test("answers a deep link with the same shell", async () => {
-    const response = await app.request("/web/settings/profile", {
+    const response = await app.request(`${web}/settings/profile`, {
       headers: { accept: "text/html" },
     });
     expect(response.status).toBe(200);
-    expect(await baseHref(response)).toBe("/web/");
+    expect(await baseHref(response)).toBe(`${web}/`);
   });
 
   test("answers a HEAD deep link without a body", async () => {
-    const response = await app.request("/web/settings/profile", {
+    const response = await app.request(`${web}/settings/profile`, {
       method: "HEAD",
       headers: { accept: "text/html" },
     });
@@ -103,7 +110,7 @@ describe("web shell", () => {
   // A client that accepts HTML does not make a write a page: the method is part
   // of what separates a deep link from everything else.
   test("404s a POST deep link instead of answering with the shell", async () => {
-    const response = await app.request("/web/settings/profile", {
+    const response = await app.request(`${web}/settings/profile`, {
       method: "POST",
       headers: { accept: "text/html" },
     });
@@ -112,13 +119,13 @@ describe("web shell", () => {
   });
 
   test("serves the bundle's assets", async () => {
-    const response = await app.request("/web/assets/app.js");
+    const response = await app.request(`${web}/assets/app.js`);
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("bundle");
   });
 
   test("404s a missing asset instead of answering with the shell", async () => {
-    const response = await app.request("/web/assets/missing.js", {
+    const response = await app.request(`${web}/assets/missing.js`, {
       headers: { accept: "text/html" },
     });
     expect(response.status).toBe(404);
@@ -129,11 +136,39 @@ describe("web shell", () => {
   // An extension means a file, even from a client that accepts HTML — the same
   // guard that keeps a missing .js from becoming HTML that fails to parse.
   test("404s a dotted deep link instead of answering with the shell", async () => {
-    const response = await app.request("/web/settings/v1.2", {
+    const response = await app.request(`${web}/settings/v1.2`, {
       headers: { accept: "text/html" },
     });
     expect(response.status).toBe(404);
     expect(await baseHref(response)).toBeUndefined();
+  });
+
+  test("sends the mount root to the canonical UI URL", async () => {
+    const response = await app.request(basePath || "/");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(`${basePath}/web`);
+  });
+});
+
+describe("the shell's base comes from the runtime, not the build", () => {
+  // With no prefix configured, the served document must stay exactly what it
+  // was before the prefix work: the cached source with `/web/` substituted.
+  test("the root mount's shell is the document with /web/ filled in", async () => {
+    const root = writeFixture();
+    try {
+      const app = makeApp(root);
+      const response = await app.request("/web/");
+      const html = readFileSync(path.join(root, "index.html"), "utf8");
+
+      expect(await response.text()).toBe(
+        html.replaceAll(WEB_BASE_URL_PLACEHOLDER, "/web/"),
+      );
+      // The base is prefix-dependent per request, so the shell must not be
+      // cached under one prefix's URL for another.
+      expect(response.headers.get("cache-control")).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("refuses to assemble an app whose shell lost the base marker", () => {
@@ -149,13 +184,7 @@ describe("web shell", () => {
       rmSync(markerlessRoot, { recursive: true, force: true });
     }
   });
-});
 
-// The shell can only name its base if the source document still ships the
-// placeholder, and only relative asset URLs let that base decide resolution —
-// the fixture above hand-writes its own index.html, so nothing else notices if
-// either half regresses.
-describe("the shell's base comes from the runtime, not the build", () => {
   test("ships the base URL placeholder in index.html", () => {
     const html = readFileSync(
       path.resolve(import.meta.dirname, "../src/frontend/index.html"),
@@ -194,3 +223,85 @@ describe("the shell's base comes from the runtime, not the build", () => {
     ).toBe('<base href="/web/" />');
   });
 });
+
+// A prefix-stripping proxy removes the prefix before forwarding, so requests
+// arrive at the root routes and only answers need the public prefix back.
+describe("X-Forwarded-Prefix with MOUSEHOLE_BASE_PATH unset", () => {
+  let root: string;
+  let app: TestApp;
+
+  beforeAll(() => {
+    root = writeFixture();
+    app = makeApp(root);
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the shell's base follows the prefix the proxy stripped", async () => {
+    const response = await app.request("/web/", {
+      headers: { "x-forwarded-prefix": "/mousehole" },
+    });
+    expect(response.status).toBe(200);
+    expect(await baseHref(response)).toBe("/mousehole/web/");
+  });
+
+  test("the slash-less /web redirect carries the prefix", async () => {
+    const response = await app.request("/web", {
+      headers: { "x-forwarded-prefix": "/mousehole" },
+    });
+    expect(response.headers.get("location")).toBe("/mousehole/web/");
+  });
+
+  test("the root redirects inside the prefix, for both content types", async () => {
+    const html = await app.request("/", {
+      headers: { "x-forwarded-prefix": "/mousehole" },
+    });
+    expect(html.headers.get("location")).toBe("/mousehole/web");
+
+    const json = await app.request("/", {
+      headers: {
+        "x-forwarded-prefix": "/mousehole",
+        accept: "application/json",
+      },
+    });
+    expect(json.headers.get("location")).toBe("/mousehole/health");
+  });
+
+  // A client can send this header itself, so it is untrusted input. A prefix is
+  // always a path: a rejected value can only mean "at the root", never a
+  // scheme-relative (off-site) URL.
+  test.each(["//evil.example", "/a/../b", "a;b"])(
+    "ignores the hostile header %j rather than echoing it",
+    async (forwardedPrefix) => {
+      const shell = await app.request("/web/", {
+        headers: { "x-forwarded-prefix": forwardedPrefix },
+      });
+      expect(await baseHref(shell)).toBe("/web/");
+
+      const redirect = await app.request("/web", {
+        headers: { "x-forwarded-prefix": forwardedPrefix },
+      });
+      expect(redirect.headers.get("location")).toBe("/web/");
+    },
+  );
+});
+
+// `transformIndexHtml` is a hook union; the plugin in vite.config.ts uses the
+// object form, whose handler ignores its context argument.
+type HtmlReplacer = (html: string) => string | undefined;
+
+type HtmlTransformPlugin = {
+  name: string;
+  apply?: string;
+  transformIndexHtml?: HtmlReplacer | { order?: string; handler: HtmlReplacer };
+};
+
+// The exported config is either the object or a function of the command, and the
+// build and serve arms set different bases, so each has to be reached on its own.
+function resolveViteConfig(command: "build" | "serve", mode: string) {
+  return typeof viteConfig === "function"
+    ? viteConfig({ command, mode })
+    : viteConfig;
+}

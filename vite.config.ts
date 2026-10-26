@@ -40,9 +40,9 @@ export default defineConfig(({ command }) => {
   return {
     root: path.resolve(import.meta.dirname, "src/frontend"),
     // Build with relative asset URLs so the shell's own <base> decides where
-    // they resolve — the app then works at the origin root, on a deep link, and
-    // (once a prefix exists) under it, without rebuilding. Dev keeps the
-    // absolute base, which is what the backend's dev proxy forwards to.
+    // they resolve — the app then works at the origin root, under a configured
+    // prefix, and on a deep link, without rebuilding. Dev keeps the absolute
+    // base, which is what the backend's dev proxy forwards to.
     base: command === "build" ? "./" : WEB_BASE_URL,
     envDir: import.meta.dirname,
     // Don't wipe the backend's logs when both run under `bun dev`.

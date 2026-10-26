@@ -68,13 +68,13 @@ export function createSessionStore(options: SessionStoreOptions) {
     if (sessionId) deleteSession(sessionId);
   }
 
-  function applyCookie(c: Context, sessionId: string): void {
+  function applyCookie(c: Context, sessionId: string, path = "/"): void {
     setCookie(c, SESSION_COOKIE_NAME, sessionId, {
       maxAge: options.durationSeconds,
       httpOnly: true,
       sameSite: "lax",
       secure: options.httpsOnlyCookies,
-      path: "/",
+      path,
     });
   }
 
@@ -89,9 +89,11 @@ export function createSessionStore(options: SessionStoreOptions) {
 }
 
 // Clearing the cookie needs no per-store state, but lives on the store's API
-// next to applyCookie, its counterpart.
-function clearCookie(c: Context): void {
-  deleteCookie(c, SESSION_COOKIE_NAME, { path: "/" });
+// next to applyCookie, its counterpart. Both take the app's mount prefix as the
+// cookie's path: the session is only useful where the app lives, and clearing
+// must target the same path or the browser keeps sending the cookie.
+function clearCookie(c: Context, path = "/"): void {
+  deleteCookie(c, SESSION_COOKIE_NAME, { path });
 }
 
 export function extractSessionId(request: Request): string | undefined {
