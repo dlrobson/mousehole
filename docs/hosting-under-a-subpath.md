@@ -32,16 +32,13 @@ Then:
 | `http://host:5010/state`  | `http://host:5010/mousehole/state`    |
 
 The value is normalised: surrounding whitespace and trailing slashes are
-dropped and a leading slash is added, so `mousehole/`, `/mousehole` and a value
-padded with spaces all name the same prefix. A value that isn't a plain URL path
-— one with a scheme or host, `//`, `.`/`..` segments, whitespace inside a
+dropped and a leading slash is added, so `mousehole/` and `/mousehole` name the
+same prefix and surrounding spaces are ignored. A value that isn't a plain URL
+path — one with a scheme or host, `//`, `.`/`..` segments, whitespace inside a
 segment, `?`, `#`, or a backslash — stops Mousehole at startup with a message
 naming `MOUSEHOLE_BASE_PATH`.
 
-With no prefix set, Mousehole behaves exactly as it did before the option
-existed.
-
-The session cookie's `Path` becomes the prefix, so the browser only sends the
+The session cookie's `Path` is set to the prefix, so the browser only sends the
 session to Mousehole, not to the other apps on the hostname.
 
 ## Reverse proxy examples
@@ -121,13 +118,13 @@ environment:
 
 Cookies keep the same `HttpOnly` / `SameSite` / `Secure`
 ([`MOUSEHOLE_HTTPS_ONLY_COOKIES`](/docs/security-guide.md#https-only-cookies))
-behavior; only the `Path` changes.
+behavior; the prefix only changes their `Path`.
 
 ## Docker healthcheck
 
 The image's built-in healthcheck reads `MOUSEHOLE_BASE_PATH` at run time and
 probes `<prefix>/health`, so it keeps working under a prefix. If you override
-`MOUSEHOLE_PORT`, override the [healthcheck](/README.md#healthcheck) as before.
+`MOUSEHOLE_PORT`, override the [healthcheck](/README.md#healthcheck) to match.
 
 ## Development
 
