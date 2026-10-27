@@ -159,6 +159,12 @@ describe.each(mounts)("web shell served $name", ({ env, basePath }) => {
     });
     expect(response.status).toBe(200);
 
+    // A configured mount is what every reply declares, so the header cannot
+    // move the base the document announces; without one it is the only source.
+    expect(await baseHref(response)).toBe(
+      basePath === "" ? "/other/web/" : `${web}/`,
+    );
+
     const vary = response.headers.get("vary")?.toLowerCase();
     if (basePath === "") {
       expect(vary).toContain("x-forwarded-prefix");

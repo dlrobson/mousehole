@@ -199,6 +199,55 @@ describe("MOUSEHOLE_BASE_PATH=/mousehole mounts the whole app", () => {
       headers: { "x-forwarded-prefix": "/other" },
     });
     expect(response.headers.get("location")).toBe("/mousehole/web");
+
+    const loginResponse = await postLogin(app, "/mousehole/login", {
+      "x-forwarded-prefix": "/other",
+    });
+    expect(sessionCookiePath(loginResponse)).toBe("/mousehole");
+  });
+});
+
+describe("the Vite dev server mount under a prefix", () => {
+  const app = makeApp(
+    { MOUSEHOLE_BASE_PATH: "/mousehole" },
+    { mode: "vite-dev-server-proxy", target: "http://vite.test" },
+  );
+
+  // Vite serves the UI from its own `/web/` base, so the mount prefix has to be
+  // gone by the time the request reaches it.
+  test("forwards the UI request with the mount prefix stripped", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("// bundle"));
+
+    const response = await app.request("/mousehole/web/assets/app.js?v=1");
+    expect(response.status).toBe(200);
+
+    const [input] = fetchSpy.mock.calls[0] ?? [];
+    expect(input).toBeInstanceOf(Request);
+    expect((input as Request).url).toBe(
+      "http://vite.test/web/assets/app.js?v=1",
+    );
+  });
+
+  // The redirect is what makes /web reachable at all under the mount: if the
+  // proxy route won, the slash-less form would be forwarded as `/web` and Vite
+  // would answer with its own redirect, leaving the prefix behind.
+  test("answers the slash-less /web without proxying it", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const response = await app.request("/mousehole/web");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/mousehole/web/");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test("reports an unreachable dev server", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNREFUSED"));
+
+    const response = await app.request("/mousehole/web/");
+    expect(response.status).toBe(502);
+    expect(await response.text()).toContain("http://vite.test");
   });
 });
 
@@ -229,17 +278,22 @@ describe("X-Forwarded-Prefix scopes replies when MOUSEHOLE_BASE_PATH is unset", 
 });
 
 describe("static UI under a prefix", () => {
-  let root: string;
+  let tmp: string;
   let app: ReturnType<typeof createApp>;
+  const canary = "served-from-outside-the-dist-root";
 
   beforeAll(() => {
-    root = mkdtempSync(path.join(tmpdir(), "mousehole-base-path-"));
-    mkdirSync(path.join(root, "assets"));
+    tmp = mkdtempSync(path.join(tmpdir(), "mousehole-base-path-"));
+    // The served root is a subdirectory, so a traversal attempt has a real file
+    // to reach: `canary.json` sits one level above it and must never be served.
+    const root = path.join(tmp, "dist");
+    mkdirSync(path.join(root, "assets"), { recursive: true });
     writeFileSync(
       path.join(root, "index.html"),
       `<!doctype html><base href="${WEB_BASE_URL_PLACEHOLDER}" />`,
     );
     writeFileSync(path.join(root, "assets", "app.js"), "// bundle");
+    writeFileSync(path.join(tmp, "canary.json"), canary);
     app = makeApp(
       { MOUSEHOLE_BASE_PATH: "/mousehole" },
       { mode: "serve-static", root },
@@ -247,7 +301,7 @@ describe("static UI under a prefix", () => {
   });
 
   afterAll(() => {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true });
   });
 
   test("serves assets with the prefix stripped before the /web segment", async () => {
@@ -261,17 +315,22 @@ describe("static UI under a prefix", () => {
     expect(response.status).toBe(404);
   });
 
-  // The static mount strips the prefix from the already-decoded path, so an
-  // encoded traversal must still be rejected (Hono's serveStatic refuses dot
-  // segments) rather than climb out of the dist root.
+  // The mount strips the prefix from the already-decoded path before serveStatic
+  // resolves it, so what reaches `join(root, …)` decides whether it can read
+  // outside the root. `%2f` survives `decodeURI` (reserved characters stay
+  // encoded) and a literal `../` is normalised away by the URL parser before it
+  // gets here, so what these rows pin is the outcome — nothing outside the root
+  // is served — and the canary is the file that would leak if an encoded
+  // separator ever became a real one.
   test.each([
-    "/mousehole/web/../index.html",
-    "/mousehole/web/..%2f..%2fpackage.json",
-    "/mousehole/web/%2e%2e/%2e%2e/package.json",
-    "/mousehole/web/assets/..%2f..%2fpackage.json",
-  ])("does not escape the dist root through %s", async (requestPath) => {
-    const response = await app.request(requestPath);
-    expect(response.status).toBe(404);
-    expect(await response.text()).not.toContain("mousehole");
-  });
+    "/mousehole/web/..%2fcanary.json",
+    "/mousehole/web/assets/..%2f..%2fcanary.json",
+  ])(
+    "does not serve a file outside the dist root through %s",
+    async (requestPath) => {
+      const response = await app.request(requestPath);
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain(canary);
+    },
+  );
 });
