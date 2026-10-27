@@ -36,10 +36,11 @@ Then:
 | `http://host:5010/health` | `http://host:5010/mousehole/health`   |
 | `http://host:5010/state`  | `http://host:5010/mousehole/state`    |
 
-The value is normalised: a missing leading slash is added and trailing slashes
-are dropped, so `/mousehole` and `mousehole/` are the same prefix. A value that
-isn't a plain URL path — one with a scheme or host, `//`, `.`/`..` segments,
-whitespace, `?`, `#`, or a backslash — stops Mousehole at startup with a message
+The value is normalised: surrounding whitespace and trailing slashes are
+dropped and a leading slash is added, so `/mousehole`, `mousehole/` and
+`/mousehole` are all the same prefix. A value that isn't a plain URL path —
+one with a scheme or host, `//`, `.`/`..` segments, whitespace inside a
+segment, `?`, `#`, or a backslash — stops Mousehole at startup with a message
 naming `MOUSEHOLE_BASE_PATH`.
 
 With no prefix set, Mousehole behaves exactly as it did before the option
