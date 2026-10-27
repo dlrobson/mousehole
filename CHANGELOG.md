@@ -5,6 +5,14 @@ about how to read this document in [CONTRIBUTING.md](/CONTRIBUTING.md).
 
 ## Unreleased
 
+### Added
+
+- `web`: `MOUSEHOLE_BASE_PATH` serves the whole app — UI and API — under a URL
+  path prefix such as `/mousehole`, so Mousehole can share a hostname with other
+  apps behind a reverse proxy. Redirects, the UI's base URL, and the session
+  cookie's scope all follow the prefix. See
+  [Hosting Under a Subpath](/docs/hosting-under-a-subpath.md).
+
 ### Fixed
 
 - `config`: `MOUSEHOLE_INSECURE_ALLOW_NO_AUTH` is now exclusive with
@@ -14,6 +22,13 @@ about how to read this document in [CONTRIBUTING.md](/CONTRIBUTING.md).
   [#170](https://github.com/t-mart/mousehole/issues/170).
 
 ### Changed
+
+- `web`: The slash-less `/web` now redirects to `/web/` (as the Vite dev server
+  already did), so the UI has one canonical URL and the document's relative
+  asset URLs resolve against the directory form. A link to `/web` still loads
+  the app; it just takes a redirect to get there. The document's base is written
+  by the server when it serves the shell, not baked in by the build, so the
+  bundle is built with relative asset URLs.
 
 - `style`: Increase word spacing for Commissioner font in
   [2e7f1b0](https://github.com/t-mart/mousehole/commit/2e7f1b0)
