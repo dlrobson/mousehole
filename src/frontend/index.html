@@ -2,6 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      Filled in whenever the server serves this document, with `<prefix>/web/`
+      (see src/shared/web-base-url.ts), so every relative URL below resolves
+      against the mount the server declared rather than the path the request
+      arrived on.
+    -->
+    <base href="__MOUSEHOLE_BASE_URL__" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mousehole</title>
   </head>
